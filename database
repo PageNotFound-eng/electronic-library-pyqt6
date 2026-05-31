@@ -1,0 +1,189 @@
+import sqlite3
+import bcrypt
+from datetime import datetime
+
+DB_NAME = "library.db"
+
+def connect_db():
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute("PRAGMA foreign_keys = ON;")  # Включаем строгую поддержку связей таблиц
+    return conn
+
+def init_db():
+    """Инициализация расширенной структуры базы данных"""
+    conn = connect_db()
+    cursor = conn.cursor()
+    
+    # 1. Таблица пользователей
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            email TEXT NOT NULL,
+            role TEXT NOT NULL
+        )
+    ''')
+    
+    # 2. Справочник жанров
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Genres (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL
+        )
+    ''')
+    
+    # 3. Таблица книг со связью с жанрами и пользователями
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Books (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            description TEXT,
+            date_added TEXT NOT NULL,
+            genre_id INTEGER,
+            user_id INTEGER,
+            FOREIGN KEY (genre_id) REFERENCES Genres(id) ON DELETE SET NULL,
+            FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
+        )
+    ''')
+    
+    # 4. Таблица отзывов
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            book_id INTEGER,
+            user_id INTEGER,
+            rating INTEGER CHECK(rating BETWEEN 1 AND 5),
+            text TEXT,
+            FOREIGN KEY (book_id) REFERENCES Books(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
+        )
+    ''')
+    
+    # Автоматическое наполнение базовыми жанрами, если таблица пуста
+    cursor.execute("SELECT COUNT(*) FROM Genres")
+    if cursor.fetchone()[0] == 0:
+        default_genres = [("Фэнтези",), ("Детектив",), ("Наука и IT",), ("Классика",), ("Роман",), ("Ужасы",)]
+        cursor.executemany("INSERT INTO Genres (name) VALUES (?)", default_genres)
+        
+    conn.commit()
+    conn.close()
+
+# --- АВТОРИЗАЦИЯ И РЕГИСТРАЦИЯ ---
+def register_user(username, password, email, role="User"):
+    conn = connect_db()
+    cursor = conn.cursor()
+    hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    try:
+        cursor.execute("INSERT INTO Users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
+                       (username, hashed, email, role))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+def login_user(username, password):
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, password_hash, role FROM Users WHERE username = ?", (username,))
+    row = cursor.fetchone()
+    conn.close()
+    if row and bcrypt.checkpw(password.encode('utf-8'), row[1].encode('utf-8')):
+        return {"id": row[0], "username": username, "role": row[2]}
+    return None
+
+# --- ЖАНРЫ ---
+def get_all_genres():
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name FROM Genres ORDER BY name")
+    genres = cursor.fetchall()
+    conn.close()
+    return genres
+
+# --- РАБОТА С КНИГАМИ ---
+def add_book(title, description, genre_id, user_id):
+    conn = connect_db()
+    cursor = conn.cursor()
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    cursor.execute("INSERT INTO Books (title, description, date_added, genre_id, user_id) VALUES (?, ?, ?, ?, ?)",
+                   (title, description, date_str, genre_id, user_id))
+    conn.commit()
+    conn.close()
+
+def get_all_books(search_text="", genre_filter_id=None):
+    """Выборка книг с динамическими фильтрами поиска и жанра"""
+    conn = connect_db()
+    cursor = conn.cursor()
+    
+    query = """
+        SELECT Books.id, Books.title, Books.description, Books.date_added, Genres.name, Users.username, Books.user_id 
+        FROM Books
+        LEFT JOIN Genres ON Books.genre_id = Genres.id
+        JOIN Users ON Books.user_id = Users.id
+        WHERE 1=1
+    """
+    params = []
+    
+    if search_text:
+        query += " AND (Books.title LIKE ? OR Books.description LIKE ?)"
+        params.extend([f"%{search_text}%", f"%{search_text}%"])
+        
+    if genre_filter_id:
+        query += " AND Books.genre_id = ?"
+        params.append(genre_filter_id)
+        
+    query += " ORDER BY Books.id DESC"
+    
+    cursor.execute(query, params)
+    books = cursor.fetchall()
+    conn.close()
+    return books
+
+def update_book(book_id, title, description, genre_id):
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE Books SET title = ?, description = ?, genre_id = ? WHERE id = ?", 
+                   (title, description, genre_id, book_id))
+    conn.commit()
+    conn.close()
+
+def delete_book(book_id):
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM Books WHERE id = ?", (book_id,))
+    conn.commit()
+    conn.close()
+
+# --- ОТЗЫВЫ ---
+def add_review(book_id, user_id, rating, text):
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO Reviews (book_id, user_id, rating, text) VALUES (?, ?, ?, ?)",
+                   (book_id, user_id, rating, text))
+    conn.commit()
+    conn.close()
+
+def get_reviews_for_book(book_id):
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT Reviews.rating, Reviews.text, Users.username 
+        FROM Reviews 
+        JOIN Users ON Reviews.user_id = Users.id 
+        WHERE Reviews.book_id = ?
+    """, (book_id,))
+    reviews = cursor.fetchall()
+    conn.close()
+    return reviews
+
+# --- СТАТИСТИКА ---
+def get_statistics_data():
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT date_added, COUNT(*) FROM Books GROUP BY date_added ORDER BY date_added")
+    data = cursor.fetchall()
+    conn.close()
+    return data
