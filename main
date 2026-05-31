@@ -1,0 +1,490 @@
+import sys
+import csv
+import matplotlib.pyplot as plt
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QDialog, QVBoxLayout, 
+                             QHBoxLayout, QLabel, QLineEdit, QTextEdit, QPushButton, 
+                             QListWidget, QListWidgetItem, QMessageBox, QComboBox, 
+                             QFormLayout, QFileDialog, QTabWidget)
+import database
+
+# --- СТИЛЬ ТЕМНОЙ НЕОНОВОЙ ТЕМЫ (QSS) ---
+DARK_STYLE = """
+    QWidget {
+        background-color: #1e1e24;
+        color: #e0e0e6;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        font-size: 13px;
+    }
+    QLineEdit, QTextEdit, QComboBox, QListWidget {
+        background-color: #25252c;
+        border: 1px solid #3a3a44;
+        border-radius: 6px;
+        padding: 6px;
+        color: #ffffff;
+    }
+    QLineEdit:focus, QTextEdit:focus, QComboBox:focus {
+        border: 1px solid #007acc;
+    }
+    QPushButton {
+        background-color: #2d2d35;
+        border: 1px solid #3a3a44;
+        border-radius: 6px;
+        padding: 8px 14px;
+        color: #ffffff;
+        font-weight: bold;
+    }
+    QPushButton:hover {
+        background-color: #007acc;
+        border: 1px solid #0098ff;
+    }
+    QPushButton:disabled {
+        background-color: #1a1a1f;
+        color: #55555c;
+        border: 1px solid #25252c;
+    }
+    QTabWidget::pane {
+        border: 1px solid #3a3a44;
+        background: #1e1e24;
+        border-radius: 6px;
+    }
+    QTabBar::tab {
+        background: #25252c;
+        padding: 8px 20px;
+        margin-right: 2px;
+        border-top-left-radius: 4px;
+        border-top-right-radius: 4px;
+    }
+    QTabBar::tab:selected {
+        background: #007acc;
+        color: white;
+    }
+    QListWidget::item {
+        padding: 8px;
+        border-bottom: 1px solid #2d2d35;
+    }
+    QListWidget::item:selected {
+        background-color: #007acc;
+        color: white;
+        border-radius: 4px;
+    }
+"""
+
+# --- ДИАЛОГ ДОБАВЛЕНИЯ/РЕДАКТИРОВАНИЯ КНИГИ ---
+class BookDialog(QDialog):
+    def __init__(self, parent=None, title="", description="", genre_id=None):
+        super().__init__(parent)
+        self.setWindowTitle("Сведения о книге")
+        self.setMinimumWidth(380)
+        self.setStyleSheet(DARK_STYLE)
+        
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        
+        self.title_input = QLineEdit(self)
+        self.title_input.setText(title)
+        form.addRow(QLabel("Название книги:"), self.title_input)
+        
+        self.genre_input = QComboBox(self)
+        self.genres_list = database.get_all_genres()
+        for g_id, g_name in self.genres_list:
+            self.genre_input.addItem(g_name, g_id)
+            
+        if genre_id:
+            index = self.genre_input.findData(genre_id)
+            if index >= 0:
+                self.genre_input.setCurrentIndex(index)
+        form.addRow(QLabel("Жанр:"), self.genre_input)
+        
+        self.desc_input = QTextEdit(self)
+        self.desc_input.setPlainText(description)
+        form.addRow(QLabel("Описание:"), self.desc_input)
+        
+        layout.addLayout(form)
+        
+        buttons = QHBoxLayout()
+        self.btn_save = QPushButton("Сохранить", self)
+        self.btn_cancel = QPushButton("Отмена", self)
+        self.btn_save.clicked.connect(self.accept)
+        self.btn_cancel.clicked.connect(self.reject)
+        
+        buttons.addWidget(self.btn_save)
+        buttons.addWidget(self.btn_cancel)
+        layout.addLayout(buttons)
+
+    def get_data(self):
+        return (
+            self.title_input.text().strip(),
+            self.desc_input.toPlainText().strip(),
+            self.genre_input.currentData()
+        )
+
+# --- ОКНО АВТОРИЗАЦИИ И РЕГИСТРАЦИИ ---
+class AuthWindow(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Авторизация ИС")
+        self.setFixedSize(360, 320)
+        self.setStyleSheet(DARK_STYLE)
+        self.user_data = None
+        
+        layout = QVBoxLayout(self)
+        self.tabs = QTabWidget(self)
+        
+        # Вкладка Входа
+        login_widget = QWidget()
+        login_layout = QVBoxLayout(login_widget)
+        self.l_username = QLineEdit()
+        self.l_username.setPlaceholderText("Логин")
+        self.l_password = QLineEdit()
+        self.l_password.setPlaceholderText("Пароль")
+        self.l_password.setEchoMode(QLineEdit.EchoMode.Password)
+        btn_login = QPushButton("Войти в систему")
+        btn_login.clicked.connect(self.handle_login)
+        
+        login_layout.addWidget(QLabel("<h2>Вход в библиотеку</h2>", alignment=Qt.AlignmentFlag.AlignCenter))
+        login_layout.addWidget(self.l_username)
+        login_layout.addWidget(self.l_password)
+        login_layout.addWidget(btn_login)
+        login_layout.addStretch()
+        
+        # Вкладка Регистрации
+        reg_widget = QWidget()
+        reg_layout = QVBoxLayout(reg_widget)
+        self.r_username = QLineEdit()
+        self.r_username.setPlaceholderText("Придумайте логин")
+        self.r_email = QLineEdit()
+        self.r_email.setPlaceholderText("Введите Email")
+        self.r_password = QLineEdit()
+        self.r_password.setPlaceholderText("Придумайте пароль")
+        self.r_password.setEchoMode(QLineEdit.EchoMode.Password)
+        
+        self.r_role = QComboBox()
+        self.r_role.addItems(["User", "Admin"])
+        
+        btn_reg = QPushButton("Создать аккаунт")
+        btn_reg.clicked.connect(self.handle_register)
+        
+        reg_layout.addWidget(self.r_username)
+        reg_layout.addWidget(self.r_email)
+        reg_layout.addWidget(self.r_password)
+        reg_layout.addWidget(QLabel("Выберите роль (для демонстрации ТЗ):"))
+        reg_layout.addWidget(self.r_role)
+        reg_layout.addWidget(btn_reg)
+        reg_layout.addStretch()
+        
+        self.tabs.addTab(login_widget, "Вход")
+        self.tabs.addTab(reg_widget, "Регистрация")
+        layout.addWidget(self.tabs)
+
+    def handle_login(self):
+        user = database.login_user(self.l_username.text().strip(), self.l_password.text())
+        if user:
+            self.user_data = user
+            self.accept()
+        else:
+            QMessageBox.critical(self, "Ошибка", "Неверный логин или пароль!")
+
+    def handle_register(self):
+        u = self.r_username.text().strip()
+        e = self.r_email.text().strip()
+        p = self.r_password.text()
+        r = self.r_role.currentText()
+        
+        if not u or not e or not p:
+            QMessageBox.warning(self, "Внимание", "Заполните все пустые поля!")
+            return
+            
+        if database.register_user(u, p, e, r):
+            QMessageBox.information(self, "Успех", "Аккаунт успешно создан! Теперь войдите.")
+            self.tabs.setCurrentIndex(0)
+        else:
+            QMessageBox.critical(self, "Ошибка", "Пользователь с таким логином уже существует!")
+
+# --- ГЛАВНОЕ ОКНО ПРИЛОЖЕНИЯ ---
+class MainWindow(QMainWindow):
+    def __init__(self, user_data):
+        super().__init__()
+        self.current_user = user_data
+        self.setWindowTitle(f"Электронная библиотека — [{self.current_user['username']} | {self.current_user['role']}]")
+        self.setMinimumSize(900, 600)
+        self.setStyleSheet(DARK_STYLE)
+        
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        main_layout = QHBoxLayout(main_widget)
+        
+        # --- ЛЕВАЯ ПАНЕЛЬ СТРУКТУРЫ ---
+        left_panel = QVBoxLayout()
+        
+        # Поиск
+        search_layout = QHBoxLayout()
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Поиск по названию/описанию...")
+        self.search_input.returnPressed.connect(self.load_books)
+        btn_search = QPushButton("Найти")
+        btn_search.clicked.connect(self.load_books)
+        search_layout.addWidget(self.search_input)
+        search_layout.addWidget(btn_search)
+        left_panel.addLayout(search_layout)
+        
+        # Новое: Фильтр по жанрам на главном окне
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Жанр:"))
+        self.filter_genre_combo = QComboBox()
+        self.filter_genre_combo.addItem("Все жанры", None)
+        for g_id, g_name in database.get_all_genres():
+            self.filter_genre_combo.addItem(g_name, g_id)
+        self.filter_genre_combo.currentIndexChanged.connect(self.load_books)
+        filter_layout.addWidget(self.filter_genre_combo)
+        left_panel.addLayout(filter_layout)
+        
+        # Список книг
+        self.books_list_widget = QListWidget()
+        self.books_list_widget.itemClicked.connect(self.show_book_details)
+        left_panel.addWidget(self.books_list_widget)
+        
+        # Панель кнопок управления
+        btn_layout_1 = QHBoxLayout()
+        btn_add = QPushButton("Добавить книгу")
+        btn_add.clicked.connect(self.handle_add_book)
+        self.btn_edit = QPushButton("Изменить")
+        self.btn_edit.setEnabled(False)
+        self.btn_edit.clicked.connect(self.handle_edit_book)
+        self.btn_delete = QPushButton("Удалить")
+        self.btn_delete.setEnabled(False)
+        self.btn_delete.clicked.connect(self.handle_delete_book)
+        
+        btn_layout_1.addWidget(btn_add)
+        btn_layout_1.addWidget(self.btn_edit)
+        btn_layout_1.addWidget(self.btn_delete)
+        left_panel.addLayout(btn_layout_1)
+        
+        btn_layout_2 = QHBoxLayout()
+        btn_csv = QPushButton("Экспорт CSV")
+        btn_csv.clicked.connect(self.handle_export_csv)
+        btn_stat = QPushButton("Статистика")
+        btn_stat.clicked.connect(self.handle_show_statistics)
+        btn_layout_2.addWidget(btn_csv)
+        btn_layout_2.addWidget(btn_stat)
+        left_panel.addLayout(btn_layout_2)
+        
+        main_layout.addLayout(left_panel, stretch=2)
+        
+        # --- ПРАВАЯ ПАНЕЛЬ СТРУКТУРЫ ---
+        right_panel = QVBoxLayout()
+        
+        self.details_label = QLabel("<h3>Выберите книгу из списка слева</h3>")
+        self.details_label.setWordWrap(True)
+        self.details_label.setTextFormat(Qt.TextFormat.RichText)
+        right_panel.addWidget(self.details_label, stretch=2)
+        
+        right_panel.addWidget(QLabel("<b>Отзывы и рецензии читателей:</b>"))
+        self.reviews_list_widget = QListWidget()
+        right_panel.addWidget(self.reviews_list_widget, stretch=2)
+        
+        # Блок добавления нового отзыва
+        review_form = QHBoxLayout()
+        self.review_text_input = QLineEdit()
+        self.review_text_input.setPlaceholderText("Напишите свое мнение о книге...")
+        self.rating_combo = QComboBox()
+        self.rating_combo.addItems(["5 ★", "4 ★", "3 ★", "2 ★", "1 ★"])
+        self.btn_send_review = QPushButton("Отправить")
+        self.btn_send_review.setEnabled(False)
+        self.btn_send_review.clicked.connect(self.handle_add_review)
+        
+        review_form.addWidget(self.review_text_input, stretch=4)
+        review_form.addWidget(self.rating_combo, stretch=1)
+        review_form.addWidget(self.btn_send_review, stretch=1)
+        right_panel.addLayout(review_form)
+        
+        main_layout.addLayout(right_panel, stretch=3)
+        
+        self.load_books()
+
+    def load_books(self):
+        self.books_list_widget.clear()
+        search = self.search_input.text().strip()
+        genre_id = self.filter_genre_combo.currentData()
+        
+        books = database.get_all_books(search, genre_id)
+        for row in books:
+            # row: (id, title, description, date_added, genre_name, username, user_id)
+            genre_name = row[4] if row[4] else "Без жанра"
+            item = QListWidgetItem(f"«{row[1]}» — {genre_name} (Добавил: {row[5]})")
+            item.setData(Qt.ItemDataRole.UserRole, row)
+            self.books_list_widget.addItem(item)
+            
+        self.btn_edit.setEnabled(False)
+        self.btn_delete.setEnabled(False)
+        self.btn_send_review.setEnabled(False)
+
+    def show_book_details(self, item):
+        book_data = item.data(Qt.ItemDataRole.UserRole)
+        genre_display = book_data[4] if book_data[4] else "Не указан"
+        
+        info_text = f"<h2>{book_data[1]}</h2>"
+        info_text += f"<p><b>Категория (Жанр):</b> <span style='color: #0098ff;'>{genre_display}</span></p>"
+        info_text += f"<p><b>Регистратор:</b> {book_data[5]} (Дата: {book_data[3]})</p>"
+        info_text += f"<p style='font-size:14px; background-color:#25252c; padding:10px; border-radius:6px;'><b>Описание:</b><br>{book_data[2]}</p>"
+        
+        self.details_label.setText(info_text)
+        self.load_reviews(book_data[0])
+        self.btn_send_review.setEnabled(True)
+        
+        # Ограничение прав доступа
+        if self.current_user["role"] == "Admin" or self.current_user["id"] == book_data[6]:
+            self.btn_edit.setEnabled(True)
+            self.btn_delete.setEnabled(True)
+        else:
+            self.btn_edit.setEnabled(False)
+            self.btn_delete.setEnabled(False)
+
+    def load_reviews(self, book_id):
+        self.reviews_list_widget.clear()
+        reviews = database.get_reviews_for_book(book_id)
+        if not reviews:
+            self.reviews_list_widget.addItem("Отзывов пока нет. Будьте первым!")
+            return
+        for rating, text, username in reviews:
+            self.reviews_list_widget.addItem(f"[{username}] Оценка: {rating}/5 \n Текст: {text}")
+
+    def handle_add_book(self):
+        dialog = BookDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            title, desc, genre_id = dialog.get_data()
+            if not title or not desc:
+                QMessageBox.warning(self, "Ошибка", "Название и описание не могут быть пустыми!")
+                return
+            database.add_book(title, desc, genre_id, self.current_user["id"])
+            self.load_books()
+
+    def handle_edit_book(self):
+        selected = self.books_list_widget.currentItem()
+        if not selected: return
+        book_data = selected.data(Qt.ItemDataRole.UserRole)
+        
+        # Получаем ID текущего жанра из БД
+        conn = database.connect_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT genre_id FROM Books WHERE id = ?", (book_data[0],))
+        current_genre_id = cursor.fetchone()[0]
+        conn.close()
+
+        dialog = BookDialog(self, title=book_data[1], description=book_data[2], genre_id=current_genre_id)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            title, desc, new_genre_id = dialog.get_data()
+            if not title or not desc:
+                QMessageBox.warning(self, "Ошибка", "Поля не должны быть пустыми!")
+                return
+            database.update_book(book_data[0], title, desc, new_genre_id)
+            self.load_books()
+            self.details_label.setText("<h3>Запись обновлена. Перевыберите книгу</h3>")
+
+    def handle_delete_book(self):
+        selected = self.books_list_widget.currentItem()
+        if not selected: return
+        book_data = selected.data(Qt.ItemDataRole.UserRole)
+        
+        confirm = QMessageBox.question(self, "Удаление", f"Вы уверены, что хотите удалить книгу «{book_data[1]}»?",
+                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if confirm == QMessageBox.StandardButton.Yes:
+            database.delete_book(book_data[0])
+            self.load_books()
+            self.details_label.setText("<h3>Выберите книгу из списка слева</h3>")
+            self.reviews_list_widget.clear()
+
+    def handle_add_review(self):
+        selected = self.books_list_widget.currentItem()
+        if not selected: return
+        book_data = selected.data(Qt.ItemDataRole.UserRole)
+        text = self.review_text_input.text().strip()
+        rating = int(self.rating_combo.currentText().split()[0])
+        
+        if not text:
+            QMessageBox.warning(self, "Внимание", "Напишите текст отзыва перед отправкой!")
+            return
+            
+        database.add_review(book_data[0], self.current_user["id"], rating, text)
+        self.review_text_input.clear()
+        self.load_reviews(book_data[0])
+
+    def handle_export_csv(self):
+        search = self.search_input.text().strip()
+        genre_id = self.filter_genre_combo.currentData()
+        books = database.get_all_books(search, genre_id)
+        
+        if not books:
+            QMessageBox.information(self, "Экспорт", "Нет данных для сохранения.")
+            return
+            
+        file_path, _ = QFileDialog.getSaveFileName(self, "Сохранить отчет CSV", "", "CSV Files (*.csv)")
+        if file_path:
+            try:
+                with open(file_path, mode='w', newline='', encoding='utf-8-sig') as f:
+                    writer = csv.writer(f, delimiter=';')
+                    writer.writerow(["ID книги", "Название", "Описание", "Дата добавления", "Жанр", "Кто добавил"])
+                    for row in books:
+                        writer.writerow([row[0], row[1], row[2], row[3], row[4], row[5]])
+                QMessageBox.information(self, "Успех", "Данные успешно выгружены в CSV!")
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить файл: {e}")
+
+    def handle_show_statistics(self):
+        """Отрисовка обновленного, аккуратного темного графика Matplotlib"""
+        data = database.get_statistics_data()
+        if not data:
+            QMessageBox.information(self, "Статистика", "В базе данных недостаточно данных.")
+            return
+            
+        dates = [str(row[0]) for row in data]
+        counts = [row[1] for row in data]
+        
+        plt.clf() 
+        plt.close('all')
+        
+        fig = plt.figure(figsize=(8, 4.5), facecolor='#1e1e24')
+        ax = plt.axes()
+        ax.set_facecolor('#25252c')
+        
+        bar_width = 0.3 if len(dates) == 1 else 0.5
+        bars = plt.bar(dates, counts, color='#007acc', edgecolor='#0098ff', linewidth=1.5, width=bar_width)
+        
+        if len(dates) == 1:
+            ax.set_xlim(-0.8, 0.8)
+        else:
+            ax.set_xlim(-0.5, len(dates) - 0.5)
+            
+        plt.title("Статистика активности: добавление книг по дням", color='#ffffff', fontsize=13, pad=15, fontweight='bold')
+        plt.xlabel("Дата добавления", color='#8a8a94', fontsize=11, labelpad=10)
+        plt.ylabel("Количество книг (шт.)", color='#8a8a94', fontsize=11, labelpad=10)
+        
+        ax.set_yticks(range(0, max(counts) + 2))
+        ax.tick_params(colors='#e0e0e6', which='both', labelsize=10)
+        plt.grid(axis='y', linestyle=':', color='#3a3a44', alpha=0.7)
+        ax.set_axisbelow(True)
+        
+        for bar in bars:
+            height = bar.get_height()
+            ax.annotate(f'{height}',
+                        xy=(bar.get_x() + bar.get_width() / 2, height),
+                        xytext=(0, 5),
+                        textcoords="offset points",
+                        ha='center', va='bottom', color='#ffffff', fontweight='bold', fontsize=11)
+        
+        for spine in ['top', 'right', 'left', 'bottom']:
+            ax.spines[spine].set_color('#3a3a44')
+            
+        plt.tight_layout()
+        plt.show()
+
+# --- СТАРТ ПРИЛОЖЕНИЯ ---
+if __name__ == "__main__":
+    database.init_db()  # Инициализируем БД
+    app = QApplication(sys.argv)
+    
+    auth = AuthWindow()
+    if auth.exec() == QDialog.DialogCode.Accepted:
+        main_win = MainWindow(auth.user_data)
+        main_win.show()
+        sys.exit(app.exec())
